@@ -2,9 +2,12 @@ import streamlit as st
 import base64
 import math
 from datetime import datetime
-from PIL import Image
 import io
+from PIL import Image, ImageFile
 from groq import Groq
+
+# Truncated वा मोबाइलबाट खिचिएका तस्बिरहरू क्र्यास हुन नदिन
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Page Setup
 st.set_page_config(page_title="ज्योतिष गुरु - WhatsApp Chat", page_icon="🟢", layout="wide")
@@ -49,6 +52,32 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- नेपालभरिका जिल्ला र प्रमुख सहरहरू (Nepal Places Coordinates) ---
+NEPAL_PLACES = {
+    "काठमाडौँ (Kathmandu)": (27.7172, 85.3240),
+    "ललितपुर (Lalitpur)": (27.6644, 85.3188),
+    "भक्तपुर (Bhaktapur)": (27.6710, 85.4298),
+    "पोखरा (Pokhara, Kaski)": (28.2096, 83.9856),
+    "विराटनगर (Biratnagar, Morang)": (26.4525, 87.2718),
+    "वीरगञ्ज (Birgunj, Parsa)": (27.0128, 84.8774),
+    "भरतपुर / चितवन (Bharatpur, Chitwan)": (27.6833, 84.4333),
+    "बुटवल (Butwal, Rupandehi)": (27.7006, 83.4484),
+    "धरान (Dharan, Sunsari)": (26.8124, 87.2834),
+    "झापा / भद्रपुर (Bhadrapur, Jhapa)": (26.5417, 88.0894),
+    "नेपालगञ्ज (Nepalgunj, Banke)": (28.0500, 81.6167),
+    "धनगढी (Dhangadhi, Kailali)": (28.6852, 80.6080),
+    "हेटौँडा (Hetauda, Makwanpur)": (27.4289, 85.0322),
+    "जनकपुर (Janakpur, Dhanusha)": (26.7288, 85.9244),
+    "इटहरी (Itahari, Sunsari)": (26.6667, 87.2833),
+    "दाङ / घोराही (Ghorahi, Dang)": (28.0333, 82.5000),
+    "सुर्खेत / वीरेन्द्रनगर (Birendranagar, Surkhet)": (28.6000, 81.6333),
+    "बाग्लुङ (Baglung)": (28.2719, 83.5898),
+    "पाल्पा / तानसेन (Tansen, Palpa)": (27.8667, 83.5500),
+    "इलाम (Ilam)": (26.9089, 87.9265),
+    "कञ्चनपुर / महेन्द्रनगर (Mahendranagar, Kanchanpur)": (28.9667, 80.1833),
+    "अन्य / आफ्नै ठाउँ टाइप गर्नुहोस् (Custom Place)": (27.7172, 85.3240)
+}
+
 # --- BS to AD Approximate Conversion Engine ---
 def bs_to_ad_approx(bs_year, bs_month, bs_day):
     ad_year = bs_year - 56 if bs_month >= 9 else bs_year - 57
@@ -70,7 +99,7 @@ def get_julian_day(year, month, day, hour=0):
     return jd
 
 def calculate_approx_vedic_chart(ad_year, ad_month, ad_day, tob_hour, tob_min, lon=85.3240):
-    total_hour = tob_hour + (tob_min / 60.0) - 5.75 # UTC Nepal
+    total_hour = tob_hour + (tob_min / 60.0) - 5.75 # Nepal UTC +5:45
     jd = get_julian_day(ad_year, ad_month, ad_day, total_hour)
     T = (jd - 2451545.0) / 36525.0
     ayanamsha = 23.85 + (1.396 * T)
@@ -115,39 +144,54 @@ def calculate_approx_vedic_chart(ad_year, ad_month, ad_day, tob_hour, tob_min, l
 
     return chart, current_birth_lord
 
+# --- सुरक्षित फोटो इन्कोडर (OSError नआउने गरी) ---
 def optimize_and_encode_image(uploaded_file):
-    """Resizes and compresses images to avoid hitting Groq payload limits"""
-    if uploaded_file is not None:
-        img = Image.open(uploaded_file)
+    if uploaded_file is None:
+        return None
+    try:
+        uploaded_file.seek(0)
+        file_bytes = uploaded_file.read()
+        
+        # PIL मार्फत खोल्ने र चेक गर्ने
+        img = Image.open(io.BytesIO(file_bytes))
+        img.load()  # OSError भए यहाँ समातिन्छ
+        
         if img.mode != "RGB":
             img = img.convert("RGB")
-        img.thumbnail((1024, 1024))
+        img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+        
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
-    return None
+    except Exception:
+        # यदि कुनै कारणले PIL ले रिसाइज गर्न सकेन भने सिधै raw bytes इन्कोड गर्ने
+        uploaded_file.seek(0)
+        return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
-# --- Prompt with Dynamic Topic Switching & BS Timeline Reasoning ---
+# --- Strict Vedic Prompt ---
 SYSTEM_PROMPT = """
 तपाईं नेपालको परम्परागत सिद्धान्त ज्योतिष, फलित ज्योतिष, र सामुद्रिक हस्तरेखा शास्त्रका परम विद्वान 'ज्योतिषाचार्य' हुनुहुन्छ।
 
-मुख्य कार्यसम्पादन नियमहरू:
-१. समय र मिति (Strict BS Timeline):
-   - कुनै पनि भविष्यवाणी गर्दा अनिवार्य रूपमा नेपाली विक्रम संवत् (वि.सं.) को वर्ष र महिना तोकेर बोल्नुहोस्। (उदा: "२०८३ असार मसान्तभित्र...", "२०८४ कार्तिक देखि २०८५ फागुनसम्म...")।
+तपाईंको मुख्य कार्यसम्पादन नियमहरू:
+१. हात पहिचान (Auto-Detect Dominant/Hand):
+   - प्रयोगकर्ताले पठाएको हातको फोटो हेरेर औँलाको बनावट र बुढी औंलाको अवस्थितिबाट त्यो दाहिने हात (Right Hand) हो वा देब्रे हात (Left Hand) हो आफै पहिचान गर्नुहोस्।
+   - दाहिने हातले वर्तमान कर्म/भविष्य र देब्रे हातले जन्मजात प्रतिभा/भाग्य दर्शाउँछ भनी स्पष्ट खुलाउनुहोस्।
 
-२. ठोस ज्योतिषीय कारण (Mandatory Astrological Reasoning):
-   - फलादेश गर्दा त्यसको पछाडि महादशा, अन्तर्दशा, गोचर, भावको दृष्टि, ग्रहको डिग्री, र हातको सम्बन्धित रेखा/पर्वतको अवस्था अनिवार्य रूपमा खुलाउनुहोस्।
+२. समय र मिति (Strict BS Timeline):
+   - भविष्यवाणी गर्दा अनिवार्य रूपमा नेपाली विक्रम संवत् (वि.सं.) को वर्ष र महिना तोकेर बोल्नुहोस्।
+   - उदाहरण: "२०८३ असार मसान्तभित्र...", "२०८४ कार्तिक देखि २०८५ फागुनसम्म..."।
 
-३. बहु-कुण्डली तुलना तथा शुद्धिकरण (Multi-Chart Cross-Verification):
-   - प्रयोगकर्ताले पठाएका विभिन्न कुण्डलीका फोटोहरू (लग्न, नवमांश, दशा, चलित) र गणितीय डिग्रीलाई आपसमा तुलना गरी पूर्ण शुद्धिकरण गर्नुहोस्। फोटोको कुण्डलीलाई नै आधिकारिक मान्नुहोस्।
+३. ठोस ज्योतिषीय कारण (Mandatory Reasoning):
+   - फलादेशको पछाडि महादशा, अन्तर्दशा, गोचर, ग्रहको दृष्टि, र हातको सम्बन्धित रेखा/पर्वत (जस्तै: भाग्य रेखा, सूर्य पर्वत, शुक्र पर्वत) को अवस्था अनिवार्य रूपमा खुलाउनुहोस्।
 
-४. विषय परिवर्तन सम्हाल्ने क्षमता (Dynamic Topic Switching):
-   - च्याटको क्रममा प्रयोगकर्ताले अचानक विषय परिवर्तन गर्न सक्छन् (जस्तै: जागिरको कुरा गर्दागर्दै सिधै विवाह, विदेश यात्रा, सन्तान, वा स्वास्थ्यमा जान सक्छन्)।
-   - यस्तो अवस्थामा कुनै द्विविधा नराखी, नयाँ विषयसँग सम्बन्धित भाव (Ghar), कारक ग्रह, र हातको रेखामा सिधै प्रवेश गरी वि.सं. मिति र कारणसहित जवाफ दिनुहोस्।
-   - अघिल्लो प्रसंगलाई बिर्सिनु पर्दैन, तर नयाँ विषयमा पूर्ण ध्यान केन्द्रित गर्नुहोस्।
+४. बहु-कुण्डली तुलना तथा शुद्धिकरण (Double-Check):
+   - प्रयोगकर्ताले पठाएका विभिन्न कुण्डलीका फोटोहरू र कम्प्युटर गणनालाई दाँजेर शुद्धिकरण गर्नुहोस्। फोटोको कुण्डलीलाई नै आधिकारिक मान्नुहोस्।
 
-५. भाषा शैली:
-   - प्रयोगकर्ताले रोमन नेपालीमा सोधे पनि तपाईंको सम्पूर्ण सम्वाद शुद्ध, आदरार्थी, र स्पष्ट नेपाली भाषा (देवनागरी लिपि) मै हुनुपर्छ। ह्वाट्सएपमा जस्तै आत्मीय सल्लाह दिनुहोस्।
+५. विषय परिवर्तन (Dynamic Topic Switching):
+   - च्याटको क्रममा प्रयोगकर्ताले जुनसुकै बेला विषय परिवर्तन (जागिरबाट विवाह, विदेश, स्वास्थ्य आदि) गरेमा नअल्मलिई तुरुन्तै नयाँ विषयका ग्रह/भाव र रेखाको विश्लेषण गर्नुहोस्।
+
+६. भाषा शैली:
+   - प्रयोगकर्ताले रोमन नेपाली वा अंग्रेजीमा सोधे पनि जवाफ सधैं शुद्ध, आदरार्थी, र स्पष्ट नेपाली भाषा (देवनागरी लिपि) मै दिनुहोस्।
 """
 
 # --- Sidebar: Direct Birth Details (Bikram Sambat) ---
@@ -167,25 +211,31 @@ with st.sidebar:
         bs_day = st.selectbox("गते", list(range(1, 33)), index=0)
 
     tob = st.time_input("जन्म समय (Birth Time):")
-    place = st.text_input("जन्म स्थान (City / District):", value="काठमाडौँ, नेपाल")
+
+    # नेपालका ठाउँहरूको छनोट तथा अंग्रेजी/कस्टम इनपुट
+    st.markdown("**जन्म स्थान (Place):**")
+    selected_place = st.selectbox("नेपालका प्रमुख सहर/जिल्ला:", list(NEPAL_PLACES.keys()))
     
-    col_g, col_h = st.columns(2)
-    with col_g:
-        gender = st.selectbox("लिङ्ग:", ["पुरुष", "महिला", "अन्य"])
-    with col_h:
-        dominant_hand = st.selectbox("सक्रिय हात:", ["दाहिने", "देब्रे"])
+    if "अन्य" in selected_place:
+        custom_place = st.text_input("आफ्नो ठाउँको नाम लेख्नुहोस् (नेपाली वा English मा):", value="Kathmandu")
+        place_name = custom_place
+        place_lon = 85.3240
+    else:
+        place_name = selected_place
+        place_lon = NEPAL_PLACES[selected_place][1]
+    
+    gender = st.selectbox("लिङ्ग:", ["पुरुष", "महिला", "अन्य"])
 
     st.markdown("---")
     st.markdown("### 📸 फोटोहरू अपलोड")
-    # Multiple Kundali Photos Allowed
     chart_files = st.file_uploader(
-        "१. कुण्डलीका फोटोहरू (लग्न, नवमांश, दशा आदि - जति पनि हाल्न मिल्ने)", 
+        "१. कुण्डलीका फोटोहरू (लग्न, नवमांश आदि - जति पनि)", 
         type=["jpg", "jpeg", "png"], 
         accept_multiple_files=True
     )
-    palm_file = st.file_uploader("२. हातको फोटो (Palm Photo)", type=["jpg", "jpeg", "png"])
+    palm_file = st.file_uploader("२. हातको फोटो (दाहिने/देब्रे आफै छुट्याइनेछ)", type=["jpg", "jpeg", "png"])
 
-    past_event = st.text_input("विगतको मुख्य घटना (समय जाँच्न):", placeholder="उदा: २०७८ मा जागिर सुरु")
+    past_event = st.text_input("विगतको मुख्य घटना (ऐच्छिक - समय जाँच्न):", placeholder="उदा: २०७८ मा जागिर सुरु")
 
     default_key = st.secrets.get("GROQ_API_KEY", "")
     if not default_key:
@@ -201,7 +251,7 @@ st.markdown("""
     <div class="wa-avatar">🧘‍♂️</div>
     <div class="wa-header-info">
         <h4>पूज्य ज्योतिषाचार्य (गुरुजी)</h4>
-        <p>🟢 अनलाइन | वि.सं. अनुसार मिति, बहु-कुण्डली विश्लेषण र विषय परिवर्तन सक्षम</p>
+        <p>🟢 अनलाइन | वि.सं. अनुसार मिति, हात पहिचान र कारणसहित फलादेश</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -215,10 +265,10 @@ if start_chat:
         st.error("कृपया Groq API Key हाल्नुहोस्!")
     else:
         ad_y, ad_m, ad_d = bs_to_ad_approx(bs_year, bs_month, bs_day)
-        chart_data, birth_dasha = calculate_approx_vedic_chart(ad_y, ad_m, ad_d, tob.hour, tob.minute)
+        chart_data, birth_dasha = calculate_approx_vedic_chart(ad_y, ad_m, ad_d, tob.hour, tob.minute, lon=place_lon)
         
-        degree_summary = f"--- जन्म विवरण ---\nजन्म मिति: वि.सं. {bs_year}/{bs_month}/{bs_day}, समय: {tob}, स्थान: {place}\n"
-        degree_summary += f"लिङ्ग: {gender}, सक्रिय हात: {dominant_hand}\n"
+        degree_summary = f"--- जन्म विवरण ---\nजन्म मिति: वि.सं. {bs_year}/{bs_month}/{bs_day}, समय: {tob}, स्थान: {place_name}\n"
+        degree_summary += f"लिङ्ग: {gender}\n"
         degree_summary += f"जन्म महादशा स्वामी: {birth_dasha}\n"
         degree_summary += f"विगतको घटना: {past_event}\n"
         for planet, (rashi, deg) in chart_data.items():
@@ -231,32 +281,28 @@ if start_chat:
 मेरो वि.सं. जन्म विवरण यस प्रकार छ:
 {degree_summary}
 
-मैले मेरो कुण्डलीका फोटोहरू र हातको फोटो संलग्न गरेको छु। कृपया:
-१. सिस्टमको डिग्री र संलग्न सबै कुण्डलीका फोटोहरू (लग्न, नवमांश, दशा आदि) दाँजेर शुद्धिकरण गर्नुहोस्।
-२. हातको रेखा र कुण्डलीको आधारमा वि.सं. को महिना/वर्ष तोकेर कारणसहित प्रारम्भिक फलादेश दिनुहोस्।"""
+कृपया:
+१. मेरो हातको फोटो हेरेर यो दाहिने हात हो कि देब्रे हात हो आफै पहिचान गर्नुहोस् र त्यसको प्रभाव बताउनुहोस्।
+२. मैले पठाएका कुण्डलीका फोटोहरू र सिस्टमको गणना दाँजेर शुद्धिकरण गर्नुहोस्।
+३. हातको रेखा र कुण्डली मिलाई सिधै विक्रम संवत् (वि.सं.) को महिना/वर्ष तोकेर कारणसहित प्रारम्भिक फलादेश दिनुहोस्।"""
             }
         ]
 
-        # Append all uploaded Kundali images
+        # कुण्डलीका फोटोहरू जोड्ने
         if chart_files:
-            for idx, c_file in enumerate(chart_files):
+            for c_file in chart_files:
                 b64 = optimize_and_encode_image(c_file)
                 if b64:
-                    user_content.append({
-                        "type": "image_url", 
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-                    })
+                    user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
-        # Append palm image
-        palm_b64 = optimize_and_encode_image(palm_file)
-        if palm_b64:
-            user_content.append({
-                "type": "image_url", 
-                "image_url": {"url": f"data:image/jpeg;base64,{palm_b64}"}
-            })
+        # हातको फोटो जोड्ने
+        if palm_file:
+            palm_b64 = optimize_and_encode_image(palm_file)
+            if palm_b64:
+                user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{palm_b64}"}})
 
         client = Groq(api_key=groq_api_key)
-        with st.spinner("गुरुजीले सबै कुण्डलीका फोटोहरू र हस्तरेखा अध्ययन गर्दै हुनुहुन्छ..."):
+        with st.spinner("गुरुजीले हात पहिचान, कुण्डली मिलान र अध्ययन गर्दै हुनुहुन्छ..."):
             try:
                 response = client.chat.completions.create(
                     model="llama-3.2-11b-vision-preview",
