@@ -6,13 +6,13 @@ import io
 from PIL import Image, ImageFile
 from groq import Groq
 
-# Truncated वा मोबाइलबाट खिचिएका तस्बिरहरू क्र्यास हुन नदिन
+# Truncated वा मोबाइलका तस्बिरहरू नबिग्रिउन् भनी सुरक्षित गर्ने
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Page Setup
-st.set_page_config(page_title="ज्योतिष गुरु - WhatsApp Chat", page_icon="🟢", layout="wide")
+st.set_page_config(page_title="ज्योतिष गुरु - WhatsApp Chat & Kundali", page_icon="🟢", layout="wide")
 
-# --- Custom WhatsApp CSS Styling ---
+# --- Custom WhatsApp & Kundali CSS Styling ---
 st.markdown("""
 <style>
     .stApp { background-color: #efeae2; }
@@ -49,10 +49,20 @@ st.markdown("""
     }
     .sender-name { font-weight: bold; font-size: 11px; color: #075e54; margin-bottom: 3px; }
     .msg-time { font-size: 10px; color: #667781; text-align: right; margin-top: 4px; }
+    
+    /* कुण्डली कार्ड स्टाइल */
+    .kundali-card {
+        background-color: #ffffff;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        border-left: 5px solid #075e54;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- नेपालभरिका जिल्ला र प्रमुख सहरहरू (Nepal Places Coordinates) ---
+# नेपालका प्रमुख सहर/जिल्लाहरू
 NEPAL_PLACES = {
     "काठमाडौँ (Kathmandu)": (27.7172, 85.3240),
     "ललितपुर (Lalitpur)": (27.6644, 85.3188),
@@ -78,7 +88,13 @@ NEPAL_PLACES = {
     "अन्य / आफ्नै ठाउँ टाइप गर्नुहोस् (Custom Place)": (27.7172, 85.3240)
 }
 
-# --- BS to AD Approximate Conversion Engine ---
+NAKSHATRAS = [
+    "अश्विनी", "भरणी", "कृत्तिका", "रोहिणी", "मृगशिरा", "आर्द्रा", "पुनर्वसु", "पुष्य", "अश्लेषा",
+    "मघा", "पूर्वाफाल्गुनी", "उत्तराफाल्गुनी", "हस्त", "चित्रा", "स्वाती", "विशाखा", "अनुराधा", "ज्येष्ठा",
+    "मूल", "पूर्वाषाढा", "उत्तराषाढा", "श्रवण", "धनिष्ठा", "शतभिषा", "पूर्वाभाद्रपद", "उत्तराभाद्रपद", "रेवती"
+]
+
+# BS to AD Conversion
 def bs_to_ad_approx(bs_year, bs_month, bs_day):
     ad_year = bs_year - 56 if bs_month >= 9 else bs_year - 57
     ad_month = (bs_month + 8) % 12
@@ -87,7 +103,7 @@ def bs_to_ad_approx(bs_year, bs_month, bs_day):
     if ad_day == 0: ad_day = 1
     return ad_year, ad_month, ad_day
 
-# --- Mathematical Degree Calculation (Vedic/Lahiri) ---
+# Mathematical Degree Calculation
 def get_julian_day(year, month, day, hour=0):
     if month <= 2:
         year -= 1
@@ -99,7 +115,7 @@ def get_julian_day(year, month, day, hour=0):
     return jd
 
 def calculate_approx_vedic_chart(ad_year, ad_month, ad_day, tob_hour, tob_min, lon=85.3240):
-    total_hour = tob_hour + (tob_min / 60.0) - 5.75 # Nepal UTC +5:45
+    total_hour = tob_hour + (tob_min / 60.0) - 5.75
     jd = get_julian_day(ad_year, ad_month, ad_day, total_hour)
     T = (jd - 2451545.0) / 36525.0
     ayanamsha = 23.85 + (1.396 * T)
@@ -113,7 +129,7 @@ def calculate_approx_vedic_chart(ad_year, ad_month, ad_day, tob_hour, tob_min, l
         v_deg = (deg - ayanamsha) % 360
         rashi_idx = int(v_deg // 30)
         degree_in_rashi = v_deg % 30
-        return rashis[rashi_idx], degree_in_rashi
+        return rashis[rashi_idx], degree_in_rashi, rashi_idx + 1
 
     sun_long = (280.460 + 0.9856474 * d) % 360
     moon_long = (218.316 + 13.176396 * d) % 360
@@ -137,64 +153,128 @@ def calculate_approx_vedic_chart(ad_year, ad_month, ad_day, tob_hour, tob_min, l
         "केतु (Ketu)": to_vedic(ketu_long)
     }
 
+    # नक्षत्र र महादशा
     moon_vedic_deg = (moon_long - ayanamsha) % 360
-    nakshatra_idx = int(moon_vedic_deg // 13.333333)
+    nakshatra_idx = int(moon_vedic_deg // 13.333333) % 27
+    nakshatra_name = NAKSHATRAS[nakshatra_idx]
+
     dasha_lords = ["केतु", "शुक्र", "सूर्य", "चन्द्र", "मंगल", "राहु", "गुरु", "शनि", "बुध"]
     current_birth_lord = dasha_lords[nakshatra_idx % 9]
 
-    return chart, current_birth_lord
+    # चन्द्र राशि (Birth Sign)
+    moon_rashi = chart["चन्द्र (Moon)"][0]
+    lagna_rashi = chart["लग्न (Lagna)"][0]
 
-# --- सुरक्षित फोटो इन्कोडर (OSError नआउने गरी) ---
+    return chart, lagna_rashi, moon_rashi, nakshatra_name, current_birth_lord
+
+# --- पारम्परिक नेपाली कुण्डली चक्र बनाउने (North Indian SVG Chart) ---
+def render_north_indian_chart(chart):
+    lagna_num = chart["लग्न (Lagna)"][2]
+    
+    # १२ वटा भावमा बस्ने ग्रहहरूको सूची बनाउने
+    houses = {i: [] for i in range(1, 13)}
+    
+    planet_abbrev = {
+        "सूर्य (Sun)": "सू",
+        "चन्द्र (Moon)": "चं",
+        "मंगल (Mars)": "मं",
+        "बृहस्पति (Guru)": "गु",
+        "शनि (Saturn)": "श",
+        "राहु (Rahu)": "रा",
+        "केतु (Ketu)": "के"
+    }
+
+    for p_name, (r_name, deg, r_num) in chart.items():
+        if p_name != "लग्न (Lagna)":
+            # भाव पत्ता लगाउने
+            house_no = ((r_num - lagna_num) % 12) + 1
+            houses[house_no].append(planet_abbrev.get(p_name, p_name[:2]))
+
+    def p_str(h_no):
+        return " ".join(houses[h_no])
+
+    # SVG Diagram
+    svg = f"""
+    <svg width="100%" height="320" viewBox="0 0 400 400" style="background:#fffaf0; border:2px solid #8b4513; border-radius:8px;">
+        <!-- Outer boundary -->
+        <rect x="10" y="10" width="380" height="380" fill="none" stroke="#8b4513" stroke-width="2"/>
+        <!-- Diagonals -->
+        <line x1="10" y1="10" x2="390" y2="390" stroke="#8b4513" stroke-width="1.5"/>
+        <line x1="10" y1="390" x2="390" y2="10" stroke="#8b4513" stroke-width="1.5"/>
+        <!-- Inner Diamond -->
+        <polygon points="200,10 390,200 200,390 10,200" fill="none" stroke="#8b4513" stroke-width="2"/>
+        
+        <!-- House 1 (Top Center Diamond) -->
+        <text x="200" y="70" font-size="12" fill="#b22222" text-anchor="middle" font-weight="bold">{lagna_num}</text>
+        <text x="200" y="110" font-size="14" fill="#075e54" text-anchor="middle" font-weight="bold">{p_str(1)}</text>
+        <text x="200" y="130" font-size="11" fill="#666" text-anchor="middle">१ (तनु/लग्न)</text>
+        
+        <!-- House 2 -->
+        <text x="100" y="40" font-size="11" fill="#b22222" text-anchor="middle">{(lagna_num % 12) + 1}</text>
+        <text x="110" y="80" font-size="13" fill="#075e54" text-anchor="middle">{p_str(2)}</text>
+        
+        <!-- House 12 -->
+        <text x="300" y="40" font-size="11" fill="#b22222" text-anchor="middle">{((lagna_num + 10) % 12) + 1}</text>
+        <text x="290" y="80" font-size="13" fill="#075e54" text-anchor="middle">{p_str(12)}</text>
+        
+        <!-- House 4 -->
+        <text x="90" y="200" font-size="12" fill="#b22222" text-anchor="middle">{((lagna_num + 2) % 12) + 1}</text>
+        <text x="90" y="220" font-size="13" fill="#075e54" text-anchor="middle">{p_str(4)}</text>
+        
+        <!-- House 7 (Bottom Center Diamond) -->
+        <text x="200" y="340" font-size="12" fill="#b22222" text-anchor="middle">{((lagna_num + 5) % 12) + 1}</text>
+        <text x="200" y="300" font-size="14" fill="#075e54" text-anchor="middle" font-weight="bold">{p_str(7)}</text>
+        
+        <!-- House 10 (Right Center Diamond) -->
+        <text x="310" y="200" font-size="12" fill="#b22222" text-anchor="middle">{((lagna_num + 8) % 12) + 1}</text>
+        <text x="310" y="220" font-size="13" fill="#075e54" text-anchor="middle">{p_str(10)}</text>
+    </svg>
+    """
+    return svg
+
 def optimize_and_encode_image(uploaded_file):
     if uploaded_file is None:
         return None
     try:
         uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
-        
-        # PIL मार्फत खोल्ने र चेक गर्ने
         img = Image.open(io.BytesIO(file_bytes))
-        img.load()  # OSError भए यहाँ समातिन्छ
-        
+        img.load()
         if img.mode != "RGB":
             img = img.convert("RGB")
         img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
-        
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
     except Exception:
-        # यदि कुनै कारणले PIL ले रिसाइज गर्न सकेन भने सिधै raw bytes इन्कोड गर्ने
         uploaded_file.seek(0)
         return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
-# --- Strict Vedic Prompt ---
+# सक्रिय Groq Vision मोडेल
+GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
+
 SYSTEM_PROMPT = """
 तपाईं नेपालको परम्परागत सिद्धान्त ज्योतिष, फलित ज्योतिष, र सामुद्रिक हस्तरेखा शास्त्रका परम विद्वान 'ज्योतिषाचार्य' हुनुहुन्छ।
 
-तपाईंको मुख्य कार्यसम्पादन नियमहरू:
-१. हात पहिचान (Auto-Detect Dominant/Hand):
-   - प्रयोगकर्ताले पठाएको हातको फोटो हेरेर औँलाको बनावट र बुढी औंलाको अवस्थितिबाट त्यो दाहिने हात (Right Hand) हो वा देब्रे हात (Left Hand) हो आफै पहिचान गर्नुहोस्।
-   - दाहिने हातले वर्तमान कर्म/भविष्य र देब्रे हातले जन्मजात प्रतिभा/भाग्य दर्शाउँछ भनी स्पष्ट खुलाउनुहोस्।
+मुख्य कार्यसम्पादन नियमहरू:
+१. कुण्डली तालिका र चक्रको मिलान (Verification):
+   - सिस्टमले स्क्रीनमा देखाएको लग्न, राशि, नक्षत्र, र ग्रह डिग्रीहरूलाई प्रयोगकर्ताको अपलोड गरिएको कुण्डलीसँग मिलाउनुहोस्।
+   - यदि केही भिन्नता भएमा प्रयोगकर्तालाई सन्तुष्ट हुने गरी स्पष्ट कारण खुलाउनुहोस्।
 
-२. समय र मिति (Strict BS Timeline):
-   - भविष्यवाणी गर्दा अनिवार्य रूपमा नेपाली विक्रम संवत् (वि.सं.) को वर्ष र महिना तोकेर बोल्नुहोस्।
-   - उदाहरण: "२०८३ असार मसान्तभित्र...", "२०८४ कार्तिक देखि २०८५ फागुनसम्म..."।
+२. दुवै हातको विश्लेषण (Dual-Hand Palmistry):
+   - देब्रे हात (जन्मजात भाग्य) र दाहिने हात (वर्तमान कर्म र पुरुषार्थ) दुवैलाई दाँजेर फलादेश दिनुहोस्।
 
-३. ठोस ज्योतिषीय कारण (Mandatory Reasoning):
-   - फलादेशको पछाडि महादशा, अन्तर्दशा, गोचर, ग्रहको दृष्टि, र हातको सम्बन्धित रेखा/पर्वत (जस्तै: भाग्य रेखा, सूर्य पर्वत, शुक्र पर्वत) को अवस्था अनिवार्य रूपमा खुलाउनुहोस्।
+३. समय र मिति (Strict BS Timeline):
+   - अनिवार्य रूपमा नेपाली विक्रम संवत् (वि.सं.) को वर्ष र महिना तोकेर बोल्नुहोस् (उदा: "२०८३ असार मसान्तभित्र...").
 
-४. बहु-कुण्डली तुलना तथा शुद्धिकरण (Double-Check):
-   - प्रयोगकर्ताले पठाएका विभिन्न कुण्डलीका फोटोहरू र कम्प्युटर गणनालाई दाँजेर शुद्धिकरण गर्नुहोस्। फोटोको कुण्डलीलाई नै आधिकारिक मान्नुहोस्।
+४. ठोस शास्त्रीय कारण (Mandatory Reasoning):
+   - फलादेश गर्दा महादशा, अन्तर्दशा, गोचर, ग्रहको दृष्टि, र हातको सम्बन्धित रेखा/पर्वतको अवस्था अनिवार्य खुलाउनुहोस्।
 
-५. विषय परिवर्तन (Dynamic Topic Switching):
-   - च्याटको क्रममा प्रयोगकर्ताले जुनसुकै बेला विषय परिवर्तन (जागिरबाट विवाह, विदेश, स्वास्थ्य आदि) गरेमा नअल्मलिई तुरुन्तै नयाँ विषयका ग्रह/भाव र रेखाको विश्लेषण गर्नुहोस्।
-
-६. भाषा शैली:
-   - प्रयोगकर्ताले रोमन नेपाली वा अंग्रेजीमा सोधे पनि जवाफ सधैं शुद्ध, आदरार्थी, र स्पष्ट नेपाली भाषा (देवनागरी लिपि) मै दिनुहोस्।
+५. भाषा शैली:
+   - सधैं शुद्ध, आदरार्थी, र स्पष्ट नेपाली भाषा (देवनागरी लिपि) मा संवाद गर्नुहोस्।
 """
 
-# --- Sidebar: Direct Birth Details (Bikram Sambat) ---
+# --- Sidebar: Direct Birth Details ---
 with st.sidebar:
     st.markdown("### 📋 जन्म विवरण (वि.सं.)")
     
@@ -212,7 +292,6 @@ with st.sidebar:
 
     tob = st.time_input("जन्म समय (Birth Time):")
 
-    # नेपालका ठाउँहरूको छनोट तथा अंग्रेजी/कस्टम इनपुट
     st.markdown("**जन्म स्थान (Place):**")
     selected_place = st.selectbox("नेपालका प्रमुख सहर/जिल्ला:", list(NEPAL_PLACES.keys()))
     
@@ -228,84 +307,108 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📸 फोटोहरू अपलोड")
-    chart_files = st.file_uploader(
-        "१. कुण्डलीका फोटोहरू (लग्न, नवमांश आदि - जति पनि)", 
-        type=["jpg", "jpeg", "png"], 
-        accept_multiple_files=True
-    )
-    palm_file = st.file_uploader("२. हातको फोटो (दाहिने/देब्रे आफै छुट्याइनेछ)", type=["jpg", "jpeg", "png"])
+    chart_files = st.file_uploader("१. कुण्डलीका फोटोहरू (जति पनि)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+    palm_files = st.file_uploader("२. हातका फोटोहरू (दाहिने र देब्रे दुवै)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
     past_event = st.text_input("विगतको मुख्य घटना (ऐच्छिक - समय जाँच्न):", placeholder="उदा: २०७८ मा जागिर सुरु")
 
     default_key = st.secrets.get("GROQ_API_KEY", "")
     if not default_key:
-        groq_api_key = st.text_input("Groq Key (एकपटकको लागि):", type="password")
+        groq_api_key = st.text_input("Groq Key:", type="password")
     else:
         groq_api_key = default_key
 
-    start_chat = st.button("🟢 कुराकानी सुरु गर्नुहोस्", use_container_width=True)
+    generate_kundali = st.button("🔮 पहिले कुण्डली चक्र र विवरण हेर्नुहोस्", use_container_width=True)
 
-# --- WhatsApp Header on Main Screen ---
+# --- Header ---
 st.markdown("""
 <div class="wa-header">
     <div class="wa-avatar">🧘‍♂️</div>
     <div class="wa-header-info">
         <h4>पूज्य ज्योतिषाचार्य (गुरुजी)</h4>
-        <p>🟢 अनलाइन | वि.सं. अनुसार मिति, हात पहिचान र कारणसहित फलादेश</p>
+        <p>🟢 अनलाइन | कुण्डली चक्र, ग्रह डिग्री र वि.सं. अनुसार फलादेश</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
+# Calculation
+ad_y, ad_m, ad_d = bs_to_ad_approx(bs_year, bs_month, bs_day)
+chart_data, lagna_rashi, moon_rashi, nakshatra_name, birth_dasha = calculate_approx_vedic_chart(
+    ad_y, ad_m, ad_d, tob.hour, tob.minute, lon=place_lon
+)
+
+# --- कुण्डली चक्र र पञ्चाङ्ग विवरण स्क्रीनमै देखाउने ---
+st.markdown('<div class="kundali-card">', unsafe_allow_html=True)
+st.subheader("🪐 कम्प्युटर गणना: लग्न कुण्डली चक्र तथा ग्रह स्पष्ट डिग्री")
+st.markdown("*तपाईंको कुण्डलीसँग मिलाएर हेर्नुहोस् (Lagna, Rashi, Degree & Nakshatra Verification):*")
+
+col_k1, col_k2 = st.columns([1.1, 1])
+
+with col_k1:
+    # परम्परागत कुण्डली चक्र
+    st.markdown(render_north_indian_chart(chart_data), unsafe_allow_html=True)
+
+with col_k2:
+    st.markdown(f"""
+    * **जन्म मिति:** वि.सं. `{bs_year}/{bs_month}/{bs_day}` (समय: `{tob}`)
+    * **स्थान:** `{place_name}`
+    * **लग्न (Ascendant):** **{lagna_rashi}** (`{chart_data['लग्न (Lagna)'][1]:.2f}°`)
+    * **जन्म राशि (Moon Sign):** **{moon_rashi}**
+    * **जन्म नक्षत्र:** **{nakshatra_name}**
+    * **जन्म महादशा स्वामी:** **{birth_dasha}**
+    """)
+    st.markdown("---")
+    st.markdown("**ग्रहहरूको स्पष्ट डिग्री र राशि:**")
+    for p_name, (r_name, deg, _) in list(chart_data.items())[1:]:
+        st.write(f"• **{p_name}:** {r_name} — `{deg:.2f}°`")
+
+st.markdown('</div>', unsafe_allow_html=True)
+
+# Session Messages
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# When Start Chat is clicked
-if start_chat:
+# बटन थिचेपछि मात्र च्याट सुरु हुने
+if generate_kundali:
     if not groq_api_key:
-        st.error("कृपया Groq API Key हाल्नुहोस्!")
+        st.error("कृपया पहिले Groq API Key हाल्नुहोस्!")
     else:
-        ad_y, ad_m, ad_d = bs_to_ad_approx(bs_year, bs_month, bs_day)
-        chart_data, birth_dasha = calculate_approx_vedic_chart(ad_y, ad_m, ad_d, tob.hour, tob.minute, lon=place_lon)
-        
-        degree_summary = f"--- जन्म विवरण ---\nजन्म मिति: वि.सं. {bs_year}/{bs_month}/{bs_day}, समय: {tob}, स्थान: {place_name}\n"
-        degree_summary += f"लिङ्ग: {gender}\n"
-        degree_summary += f"जन्म महादशा स्वामी: {birth_dasha}\n"
-        degree_summary += f"विगतको घटना: {past_event}\n"
-        for planet, (rashi, deg) in chart_data.items():
+        degree_summary = f"--- कम्प्युटर गणना कुण्डली ---\nजन्म मिति: वि.सं. {bs_year}/{bs_month}/{bs_day}, समय: {tob}, स्थान: {place_name}\n"
+        degree_summary += f"लग्न: {lagna_rashi}, चन्द्र राशि: {moon_rashi}, नक्षत्र: {nakshatra_name}\n"
+        degree_summary += f"जन्म महादशा: {birth_dasha}\n"
+        for planet, (rashi, deg, _) in chart_data.items():
             degree_summary += f"{planet}: {rashi} ({deg:.2f}°)\n"
 
         user_content = [
             {
                 "type": "text", 
                 "text": f"""प्रणाम गुरुज्यू! 
-मेरो वि.सं. जन्म विवरण यस प्रकार छ:
+सिस्टमले निकालेको मेरो कुण्डली विवरण यस प्रकार छ:
 {degree_summary}
 
 कृपया:
-१. मेरो हातको फोटो हेरेर यो दाहिने हात हो कि देब्रे हात हो आफै पहिचान गर्नुहोस् र त्यसको प्रभाव बताउनुहोस्।
-२. मैले पठाएका कुण्डलीका फोटोहरू र सिस्टमको गणना दाँजेर शुद्धिकरण गर्नुहोस्।
-३. हातको रेखा र कुण्डली मिलाई सिधै विक्रम संवत् (वि.सं.) को महिना/वर्ष तोकेर कारणसहित प्रारम्भिक फलादेश दिनुहोस्।"""
+१. सिस्टमले स्क्रीनमा देखाएको यो कुण्डली चक्र/डिग्री र मैले पठाएका कुण्डलीका फोटोहरू दाँजेर शुद्धिकरण गरिदिनुहोस्।
+२. मेरा दुवै हातका रेखाहरू र यो कुण्डली मिलाई सिधै विक्रम संवत् (वि.सं.) को महिना/वर्ष तोकेर कारणसहित प्रारम्भिक फलादेश दिनुहोस्।"""
             }
         ]
 
-        # कुण्डलीका फोटोहरू जोड्ने
         if chart_files:
             for c_file in chart_files:
                 b64 = optimize_and_encode_image(c_file)
                 if b64:
                     user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
-        # हातको फोटो जोड्ने
-        if palm_file:
-            palm_b64 = optimize_and_encode_image(palm_file)
-            if palm_b64:
-                user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{palm_b64}"}})
+        if palm_files:
+            for p_file in palm_files:
+                b64 = optimize_and_encode_image(p_file)
+                if b64:
+                    user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
 
         client = Groq(api_key=groq_api_key)
-        with st.spinner("गुरुजीले हात पहिचान, कुण्डली मिलान र अध्ययन गर्दै हुनुहुन्छ..."):
+        with st.spinner("गुरुजीले चक्र, डिग्री र हस्तरेखा मिलाउँदै हुनुहुन्छ..."):
             try:
                 response = client.chat.completions.create(
-                    model="llama-3.2-11b-vision-preview",
+                    model=GROQ_VISION_MODEL,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_content}
@@ -315,11 +418,28 @@ if start_chat:
                 )
                 guru_reply = response.choices[0].message.content
                 st.session_state.messages = [
-                    {"role": "user", "content": f"प्रणाम गुरुज्यू, मेरो जन्म मिति वि.सं. {bs_year}/{bs_month}/{bs_day} हो। मेरो कुण्डली र हात हेरिदिनुहोस्।", "time": datetime.now().strftime("%I:%M %p")},
+                    {"role": "user", "content": f"प्रणाम गुरुज्यू, मेरो कुण्डली चक्र (लग्न: {lagna_rashi}, राशि: {moon_rashi}) र हात हेरिदिनुहोस्।", "time": datetime.now().strftime("%I:%M %p")},
                     {"role": "assistant", "content": guru_reply, "time": datetime.now().strftime("%I:%M %p")}
                 ]
             except Exception as e:
-                st.error(f"त्रुटि: {str(e)}")
+                # यदि मोडल समस्या आएमा fallback
+                try:
+                    response = client.chat.completions.create(
+                        model="meta-llama/llama-4-scout-17b-16e-instruct",
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_content}
+                        ],
+                        temperature=0.6,
+                        max_tokens=2048
+                    )
+                    guru_reply = response.choices[0].message.content
+                    st.session_state.messages = [
+                        {"role": "user", "content": f"प्रणाम गुरुज्यू, मेरो कुण्डली चक्र (लग्न: {lagna_rashi}, राशि: {moon_rashi}) र हात हेरिदिनुहोस्।", "time": datetime.now().strftime("%I:%M %p")},
+                        {"role": "assistant", "content": guru_reply, "time": datetime.now().strftime("%I:%M %p")}
+                    ]
+                except Exception as e2:
+                    st.error(f"त्रुटि: {str(e2)}")
 
 # --- Render WhatsApp Chat Messages ---
 st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -342,7 +462,7 @@ for msg in st.session_state.messages:
         ''', unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Chat Input (Handles Dynamic Topic Switching) ---
+# --- Chat Input (WhatsApp Style) ---
 if user_question := st.chat_input("यहाँ सन्देश लेख्नुहोस् (कुनै पनि विषय: करियर, विवाह, विदेश, स्वास्थ्य...)..."):
     if not groq_api_key:
         st.warning("कृपया पहिले Groq API Key हाल्नुहोस्!")
@@ -358,7 +478,7 @@ if user_question := st.chat_input("यहाँ सन्देश लेख्�
                     api_messages.append({"role": m["role"], "content": m["content"]})
 
                 response = client.chat.completions.create(
-                    model="llama-3.2-11b-vision-preview",
+                    model=GROQ_VISION_MODEL,
                     messages=api_messages,
                     temperature=0.6,
                     max_tokens=1500
@@ -367,4 +487,18 @@ if user_question := st.chat_input("यहाँ सन्देश लेख्�
                 st.session_state.messages.append({"role": "assistant", "content": reply, "time": datetime.now().strftime("%I:%M %p")})
                 st.rerun()
             except Exception as e:
-                st.error(f"त्रुटि: {str(e)}")
+                try:
+                    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    for m in st.session_state.messages:
+                        api_messages.append({"role": m["role"], "content": m["content"]})
+                    response = client.chat.completions.create(
+                        model="meta-llama/llama-4-scout-17b-16e-instruct",
+                        messages=api_messages,
+                        temperature=0.6,
+                        max_tokens=1500
+                    )
+                    reply = response.choices[0].message.content
+                    st.session_state.messages.append({"role": "assistant", "content": reply, "time": datetime.now().strftime("%I:%M %p")})
+                    st.rerun()
+                except Exception as e2:
+                    st.error(f"त्रुटि: {str(e2)}")
